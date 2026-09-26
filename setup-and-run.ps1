@@ -177,6 +177,19 @@ else {
 }
 Ok "Using Maven at $Mvn"
 
+# ------------------------------------------------------------------- stop a previous run of the app
+# a still-running ArtistikCity keeps its jar locked (the rebuild then fails) and keeps the port busy
+$old = @(Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='javaw.exe'" -ErrorAction SilentlyContinue |
+         Where-Object { $_.CommandLine -and $_.CommandLine -match 'artistikcity(-1\.0\.0|-run)\.jar' })
+if ($old.Count -gt 0) {
+    Step 'Stopping the ArtistikCity that is still running from an earlier start'
+    foreach ($o in $old) {
+        Info "Stopping process $($o.ProcessId)"
+        Stop-Process -Id $o.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 2
+}
+
 # ---------------------------------------------------------------------------------------------- Build
 if ($SkipBuild -and (Test-Path $Jar)) {
     Step 'Skipping build (-SkipBuild)'
@@ -277,7 +290,12 @@ $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Silentl
 if ($busy) { Fail "Port $Port is already in use. Stop the other program or run with -Port 8081." }
 
 Step "Starting ArtistikCity on http://localhost:$Port  (press Ctrl+C to stop)"
-$argList = @($JavaArgs + @('-jar', "`"$Jar`"", "--server.port=$Port", '--logging.file.name=logs/app.log'))
+# run a copy of the jar, so a running app never blocks the next rebuild
+$RunDir = Join-Path $Tools 'run'
+New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
+$RunJar = Join-Path $RunDir 'artistikcity-run.jar'
+Copy-Item -Path $Jar -Destination $RunJar -Force
+$argList = @($JavaArgs + @('-jar', "`"$RunJar`"", "--server.port=$Port", '--logging.file.name=logs/app.log'))
 Info "Application log: $LogDir\app.log"
 $proc = Start-Process -FilePath $JavaExe -ArgumentList $argList -WorkingDirectory $Root -NoNewWindow -PassThru
 
