@@ -62,7 +62,7 @@ trap {
 
 $JdkUrl        = 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.12%2B7/OpenJDK17U-jdk_x64_windows_hotspot_17.0.12_7.zip'
 $MavenVersion  = '3.9.9'
-$MavenUrls     = @("https://dlcdn.apache.org/maven/maven-3/$MavenVersion/binaries/apache-maven-$MavenVersion-bin.zip",
+$MavenUrls     = @("https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/$MavenVersion/apache-maven-$MavenVersion-bin.zip",
                    "https://archive.apache.org/dist/maven/maven-3/$MavenVersion/binaries/apache-maven-$MavenVersion-bin.zip")
 $MssqlVersion  = '12.8.1'
 $Jar           = Join-Path $Root 'target\artistikcity-1.0.0.jar'
@@ -113,30 +113,51 @@ function Get-JavaMajor($javaExe) {
     return 0
 }
 
+# real installation folder of a java.exe (resolves Oracle's "javapath" shortcuts)
+function Get-JavaHome($javaExe) {
+    try {
+        $out = cmd /c "call `"$javaExe`" -XshowSettings:properties -version 2>&1" | Out-String
+        if ($out -match 'java\.home = (.+)') { return $Matches[1].Trim() }
+    } catch { }
+    return $null
+}
+
 # ----------------------------------------------------------------------------------------------- Java
-Step 'Checking Java (17 or newer)'
-$JavaExe = $null
+Step 'Checking Java (JDK 17 or newer)'
+$JdkHome = $null
 $candidates = @()
+$portableJdk = Get-ChildItem -Path $Tools -Directory -Filter 'jdk-17*' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($portableJdk) { $candidates += (Join-Path $portableJdk.FullName 'bin\java.exe') }
 if ($env:JAVA_HOME) { $candidates += (Join-Path $env:JAVA_HOME 'bin\java.exe') }
 $cmd = Get-Command java.exe -ErrorAction SilentlyContinue
 if ($cmd) { $candidates += $cmd.Source }
-$portableJdk = Get-ChildItem -Path $Tools -Directory -Filter 'jdk-17*' -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($portableJdk) { $candidates = @((Join-Path $portableJdk.FullName 'bin\java.exe')) + $candidates }
-foreach ($c in $candidates) {
-    if ((Test-Path $c) -and ((Get-JavaMajor $c) -ge 17)) { $JavaExe = $c; break }
+foreach ($base in @("$env:ProgramFiles\Java", "$env:ProgramFiles\Eclipse Adoptium", "$env:ProgramFiles\Microsoft", "$env:ProgramFiles\Zulu")) {
+    if (Test-Path $base) {
+        Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending |
+            ForEach-Object { $candidates += (Join-Path $_.FullName 'bin\java.exe') }
+    }
 }
-if (-not $JavaExe) {
-    Info 'Java 17+ not found - downloading a portable JDK 17 (about 190 MB, one time only)'
+foreach ($c in ($candidates | Select-Object -Unique)) {
+    if (-not (Test-Path $c)) { continue }
+    $major = Get-JavaMajor $c
+    if ($major -lt 17) { continue }
+    $jh = Get-JavaHome $c
+    if ($jh -and (Test-Path (Join-Path $jh 'bin\javac.exe'))) { $JdkHome = $jh; break }
+    Info "Skipping Java $major at $c - it is a runtime only (no javac), a JDK is needed to build"
+}
+if (-not $JdkHome) {
+    Info 'JDK 17+ not found - downloading a portable JDK 17 (about 190 MB, one time only)'
     $zip = Join-Path $Tools 'jdk17.zip'
     Download $JdkUrl $zip
     Info 'Unpacking the JDK'
     Unzip $zip $Tools
     Remove-Item $zip
     $portableJdk = Get-ChildItem -Path $Tools -Directory -Filter 'jdk-17*' | Select-Object -First 1
-    $JavaExe = Join-Path $portableJdk.FullName 'bin\java.exe'
+    $JdkHome = $portableJdk.FullName
 }
-$env:JAVA_HOME = Split-Path -Parent (Split-Path -Parent $JavaExe)
-$env:Path = (Join-Path $env:JAVA_HOME 'bin') + ';' + $env:Path
+$JavaExe = Join-Path $JdkHome 'bin\java.exe'
+$env:JAVA_HOME = $JdkHome
+$env:Path = (Join-Path $JdkHome 'bin') + ';' + $env:Path
 Ok "Using Java $(Get-JavaMajor $JavaExe) at $env:JAVA_HOME"
 
 # ---------------------------------------------------------------------------------------------- Maven
