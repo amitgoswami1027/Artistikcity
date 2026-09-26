@@ -47,6 +47,19 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 $Tools = Join-Path $Root '.tools'
 New-Item -ItemType Directory -Force -Path $Tools | Out-Null
+$LogDir = Join-Path $Root 'logs'
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+try { Start-Transcript -Path (Join-Path $LogDir 'setup.log') -Force | Out-Null } catch { }
+Write-Host "ArtistikCity setup - PowerShell $($PSVersionTable.PSVersion) - folder $Root"
+
+# any unexpected error: show it clearly (it is also written to logs\setup.log)
+trap {
+    Write-Host ''
+    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host $_.InvocationInfo.PositionMessage
+    try { Stop-Transcript | Out-Null } catch { }
+    exit 1
+}
 
 $JdkUrl        = 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.12%2B7/OpenJDK17U-jdk_x64_windows_hotspot_17.0.12_7.zip'
 $MavenVersion  = '3.9.9'
@@ -60,7 +73,21 @@ $DockerDefaultPassword = 'Artistik#2026Pass'
 function Step($msg) { Write-Host ''; Write-Host "==> $msg" -ForegroundColor Cyan }
 function Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 function Info($msg) { Write-Host "    $msg" }
-function Fail($msg) { Write-Host ''; Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
+function Fail($msg) {
+    Write-Host ''; Write-Host "ERROR: $msg" -ForegroundColor Red
+    try { Stop-Transcript | Out-Null } catch { }
+    exit 1
+}
+
+# unzip with the built-in tar.exe (fast) and fall back to Expand-Archive
+function Unzip($zip, $dest) {
+    $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    if (Test-Path $tar) {
+        & $tar -xf $zip -C $dest
+        if ($LASTEXITCODE -eq 0) { return }
+    }
+    Expand-Archive -Path $zip -DestinationPath $dest -Force
+}
 
 function Download($urls, $target) {
     foreach ($u in @($urls)) {
@@ -77,7 +104,7 @@ function Download($urls, $target) {
 
 function Get-JavaMajor($javaExe) {
     try {
-        $out = cmd /c "`"$javaExe`" -version 2>&1" | Out-String
+        $out = cmd /c "call `"$javaExe`" -version 2>&1" | Out-String
         if ($out -match 'version "(\d+)(\.(\d+))?') {
             $major = [int]$Matches[1]
             if ($major -eq 1) { $major = [int]$Matches[3] }
@@ -103,7 +130,8 @@ if (-not $JavaExe) {
     Info 'Java 17+ not found - downloading a portable JDK 17 (about 190 MB, one time only)'
     $zip = Join-Path $Tools 'jdk17.zip'
     Download $JdkUrl $zip
-    Expand-Archive -Path $zip -DestinationPath $Tools -Force
+    Info 'Unpacking the JDK'
+    Unzip $zip $Tools
     Remove-Item $zip
     $portableJdk = Get-ChildItem -Path $Tools -Directory -Filter 'jdk-17*' | Select-Object -First 1
     $JavaExe = Join-Path $portableJdk.FullName 'bin\java.exe'
@@ -123,7 +151,7 @@ else {
     Info 'Maven not found - downloading a portable Maven (about 10 MB, one time only)'
     $zip = Join-Path $Tools 'maven.zip'
     Download $MavenUrls $zip
-    Expand-Archive -Path $zip -DestinationPath $Tools -Force
+    Unzip $zip $Tools
     Remove-Item $zip
     $Mvn = $portableMvn
 }
@@ -134,7 +162,8 @@ if ($SkipBuild -and (Test-Path $Jar)) {
     Step 'Skipping build (-SkipBuild)'
 } else {
     Step 'Building the application (first time downloads libraries, this can take a few minutes)'
-    & $Mvn -B -q -DskipTests package
+    # run through cmd so Maven's output is shown and recorded in logs\setup.log
+    cmd /c "call `"$Mvn`" -B --no-transfer-progress -DskipTests package 2>&1" | Out-Host
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $Jar)) { Fail 'The Maven build failed - see the messages above.' }
     Ok "Built $Jar"
 }
@@ -200,7 +229,7 @@ if ($Db -eq 'dev') {
     $state = $null
     $attempts = if ($Db -eq 'docker') { 40 } else { 1 }
     for ($i = 1; $i -le $attempts; $i++) {
-        $out = cmd /c "`"$JavaExe`" $($JavaArgs -join ' ') -cp `"$driverJar`" tools\CreateDatabase.java `"$masterUrl`" `"$u`" `"$p`" $Database 2>&1" | Out-String
+        $out = cmd /c "call `"$JavaExe`" $($JavaArgs -join ' ') -cp `"$driverJar`" tools\CreateDatabase.java `"$masterUrl`" `"$u`" `"$p`" $Database 2>&1" | Out-String
         if ($out -match '(CREATED|EMPTY|READY)') { $state = $Matches[1]; break }
         if ($i -lt $attempts) { Info "Waiting for SQL Server to accept connections ($i/$attempts)..."; Start-Sleep -Seconds 3 }
     }
@@ -228,7 +257,8 @@ $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Silentl
 if ($busy) { Fail "Port $Port is already in use. Stop the other program or run with -Port 8081." }
 
 Step "Starting ArtistikCity on http://localhost:$Port  (press Ctrl+C to stop)"
-$argList = @($JavaArgs + @('-jar', "`"$Jar`"", "--server.port=$Port"))
+$argList = @($JavaArgs + @('-jar', "`"$Jar`"", "--server.port=$Port", '--logging.file.name=logs/app.log'))
+Info "Application log: $LogDir\app.log"
 $proc = Start-Process -FilePath $JavaExe -ArgumentList $argList -WorkingDirectory $Root -NoNewWindow -PassThru
 
 $url = "http://localhost:$Port/"
@@ -246,6 +276,8 @@ if ($up) {
     Write-Host ''
     if (-not $NoBrowser) { Start-Process $url }
 } elseif ($proc.HasExited) {
-    Fail 'The application stopped during start-up - see the log above.'
+    Fail 'The application stopped during start-up - see the log above (also logs\app.log).'
+} else {
+    Write-Host 'The site did not answer within 3 minutes - still waiting; see logs\app.log.' -ForegroundColor Yellow
 }
 try { Wait-Process -Id $proc.Id } finally { if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force } }

@@ -12,3 +12,4 @@ storage/certificates/
 # transfer / download leftovers
 *.tgz
 *.tar.gz
+logs/
