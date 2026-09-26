@@ -1,0 +1,14 @@
+target/
+frontend/node_modules/
+*.log
+.idea/
+*.iml
+.vscode/
+.DS_Store
+# user uploads (keep the demo images under storage/uploads in version control if you like)
+storage/certificates/
+.tools/
+.env
+# transfer / download leftovers
+*.tgz
+*.tar.gz
