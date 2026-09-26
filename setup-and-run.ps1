@@ -22,7 +22,6 @@
 .EXAMPLE
     .\setup-and-run.ps1 -Db sqlserver -SqlInstance SQLEXPRESS -Trusted     # Windows authentication
 #>
-[CmdletBinding()]
 param(
     [ValidateSet('dev', 'docker', 'sqlserver')]
     [string]$Db = 'dev',
@@ -81,8 +80,8 @@ function Fail($msg) {
 
 # unzip with the built-in tar.exe (fast) and fall back to Expand-Archive
 function Unzip($zip, $dest) {
-    $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
-    if (Test-Path $tar) {
+    $tar = if ($env:SystemRoot) { Join-Path $env:SystemRoot 'System32\tar.exe' } else { '' }
+    if ($tar -and (Test-Path $tar)) {
         & $tar -xf $zip -C $dest
         if ($LASTEXITCODE -eq 0) { return }
     }
