@@ -41,6 +41,7 @@ p:last-child{ margin-bottom:0px;}
 .hdLeft{float:left;}
 .logo{ float:left; display:flex; height:90px; align-items:center;}
 .logo a, .logo img{ display:block;}
+.logo img, .ftrlogo img{ height:60px; width:auto;}
 .navigation{float:left; border-left:1px solid #e5e5e5; border-right:1px solid #e5e5e5; display:flex; height:90px; align-items:center; margin-left:35px;}
 .navigation ul{ float:left; padding:0 30px;}
 .navigation ul li{float:left; position:relative; padding:0 10px;}
@@ -878,6 +879,7 @@ ul.connect li img{ display:block; margin-right:25px;}
     }
     .logo a img {
         width: 225px;
+        height: auto;
     }
     .ak-btn1, .navigation ul li a.ak-btn1{
         padding: 5px 10px;
